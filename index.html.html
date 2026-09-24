@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#050505">
+<title>For you 🌻</title>
+<!-- Optional elegant font (needs internet). Falls back to Georgia offline. -->
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;1,500;1,600&display=swap" rel="stylesheet">
+<style>
+:root{--gold:#ffc93c;--serif:'Cormorant Garamond','Playfair Display',Georgia,'Times New Roman',serif}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;overflow:hidden;background:#050505;color:#f6e7c1;font-family:var(--serif);overscroll-behavior:none;touch-action:none}
+canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
+
+/* ---------- Scene 1: opening screen ---------- */
+.layer{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:24px;pointer-events:none}
+#intro{transition:opacity 1.6s ease,transform 1.9s cubic-bezier(.2,.7,.2,1),filter 1.6s ease}
+#intro.out{opacity:0;transform:scale(1.18);filter:blur(6px)}
+#intro h1{font-weight:500;font-style:italic;font-size:clamp(30px,8.5vw,48px);line-height:1.25;color:#ffe7a3;
+  text-shadow:0 0 18px rgba(255,190,60,.55),0 0 52px rgba(255,160,20,.3);opacity:0;animation:fade 3s .6s forwards}
+.btn{pointer-events:auto;font:italic 500 18px var(--serif);color:var(--gold);background:rgba(255,201,60,.06);
+  border:1px solid rgba(255,201,60,.45);border-radius:999px;padding:13px 32px;cursor:pointer;letter-spacing:.04em;
+  text-shadow:0 0 10px rgba(255,190,60,.6)}
+#open{margin-top:46px;opacity:0;animation:fade 2s 3s forwards,pulse 2.8s 5s ease-in-out infinite}
+@keyframes fade{to{opacity:1}}
+@keyframes pulse{0%,100%{box-shadow:0 0 8px rgba(255,190,60,.25)}50%{box-shadow:0 0 26px rgba(255,190,60,.6)}}
+
+/* ---------- Scene 3: messages + replay ---------- */
+#msgs{position:fixed;left:0;right:0;bottom:calc(76px + env(safe-area-inset-bottom));padding:0 28px;text-align:center;pointer-events:none}
+.msg{max-width:440px;margin:0 auto;opacity:0;transform:translateY(8px);transition:opacity 2.6s ease,transform 2.6s ease}
+.msg.show{opacity:1;transform:none}
+#m1{font-size:clamp(18px,4.8vw,23px);line-height:1.45;color:#ffeab5;text-shadow:0 0 14px rgba(255,190,60,.35)}
+#m2{margin-top:12px;font-style:italic;font-size:clamp(15px,4vw,18px);color:rgba(255,201,60,.8)}
+#replay{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom));transform:translateX(-50%);
+  font-size:15px;padding:9px 22px;opacity:0;visibility:hidden;transition:opacity 2s ease}
+#replay.show{opacity:.7;visibility:visible}
+@media (prefers-reduced-motion:reduce){#open{animation:fade 2s 3s forwards}}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="intro" class="layer">
+  <h1>I made this just for you! 🌻</h1>
+  <button id="open" class="btn">Open it ❤️</button>
+</div>
+
+<div id="msgs">
+  <p id="m1" class="msg">For you, because you deserve flowers even when I can't buy you any. 🌻❤️</p>
+  <p id="m2" class="msg">Made with a little code and a lot of love.</p>
+</div>
+<button id="replay" class="btn">Replay 🌻</button>
+
+<script>
+(()=>{
+'use strict';
+/* =====================================================================
+   SETTINGS — change timings (in seconds of scene 2) or colours here
+   ===================================================================== */
+const T={stem:[1.2,4.4], bud:[4.2,5.4], pet0:5.0, petSpan:3.8, petDur:1.6, center:[8.6,11], msg1:11.4, msg2:15};
+// Petal layers, back -> front: count, length factor, angular offset, gradient colours (base, mid, tip)
+const LAYERS=[
+  {n:26,k:1,   off:0,  c:['#a85a06','#e59a0c','#ffc21f']},
+  {n:24,k:.94, off:.5, c:['#d98a0a','#ffbb14','#ffe45c']},
+  {n:18,k:.82, off:.25,c:['#f5a808','#ffd21f','#fff08a']}
+];
+const SEED_COLORS=['#080401','#1b0d04','#3a1e09','#68380f','#b06b1c'];
+
+/* ---------- helpers ---------- */
+const $=id=>document.getElementById(id);
+const cv=$('c'),ctx=cv.getContext('2d');
+const cl=(x,a=0,b=1)=>Math.min(b,Math.max(a,x));
+const seg=(t,a,b)=>cl((t-a)/(b-a));           // 0..1 progress of t between a and b
+const eo=x=>1-Math.pow(1-x,3);                // ease-out
+const rnd=(a,b)=>a+Math.random()*(b-a);
+let W,H,R,Rc,baseX,baseY,stemL,bgG;
+
+/* ---------- sizing (canvas is capped at 2x DPR for phone performance) ---------- */
+function resize(){
+  const d=Math.min(window.devicePixelRatio||1,2);
+  W=innerWidth;H=innerHeight;cv.width=W*d;cv.height=H*d;ctx.setTransform(d,0,0,d,0,0);
+  R=Math.min(W*.35,H*.17);      // outer radius of the flower head
+  Rc=R*.4;                      // radius of the seed disc
+  baseX=W/2;baseY=H*.72;stemL=H*.38;
+  bgG=ctx.createRadialGradient(W/2,H*.4,0,W/2,H*.4,H*.75);
+  bgG.addColorStop(0,'#150e05');bgG.addColorStop(1,'#050505');
+}
+addEventListener('resize',resize);resize();
+
+/* ---------- glow sprite (drawn once, reused for every particle) ---------- */
+const spr=document.createElement('canvas');spr.width=spr.height=64;
+{const g=spr.getContext('2d'),r=g.createRadialGradient(32,32,0,32,32,32);
+ r.addColorStop(0,'rgba(255,245,190,1)');r.addColorStop(.25,'rgba(255,201,60,.8)');r.addColorStop(1,'rgba(255,165,20,0)');
+ g.fillStyle=r;g.fillRect(0,0,64,64);}
+const glow=(x,y,s,a)=>{if(a>.01){ctx.globalAlpha=a;ctx.drawImage(spr,x-s,y-s,s*2,s*2)}};
+
+/* ---------- particles: A = ambient fireflies, Bp = sparks/bursts ---------- */
+const A=[],Bp=[];
+const amb=()=>({x:rnd(0,W),y:rnd(0,H),vx:rnd(-6,6),vy:rnd(-14,-4),s:rnd(4,11),ph:rnd(0,6.28)});
+const spark=(x,y,vx,vy,s,max)=>Bp.push({x,y,vx,vy,s,life:0,max});
+function burst(x,y,n,sp){for(let i=0;i<n;i++){const a=rnd(0,6.28),v=rnd(.2,1)*sp;spark(x,y,Math.cos(a)*v,Math.sin(a)*v-20,rnd(4,9),rnd(1,2.2))}}
+
+/* ---------- flower data (seeded so every replay looks the same) ---------- */
+let rs=20240214;const rand=()=>(rs=(rs*16807)%2147483647)/2147483647;
+const petals=[];
+LAYERS.forEach((L,li)=>{for(let i=0;i<L.n;i++)petals.push({
+  a:(i+L.off+(rand()-.5)*.5)/L.n*6.2832,len:L.k*(.9+rand()*.2),w:.85+rand()*.3,tw:(rand()-.5)*.2,ph:rand()*6.28,l:li,s:0})});
+petals.forEach((p,i)=>p.s=T.pet0+i/(petals.length-1)*T.petSpan);   // one-by-one unfolding order
+const leaves=[{u:.32,side:-1,k:1,t:2.6},{u:.44,side:1,k:1,t:3.1},{u:.58,side:-1,k:.8,t:3.6},{u:.68,side:1,k:.7,t:4.0}];
+// Sunflower seed head: golden-angle (Fibonacci) spiral, grouped by colour for fast drawing
+const N=480,SEEDS=[[],[],[],[],[]];
+for(let i=0;i<N;i++){const r=Math.sqrt((i+.5)/N),a=i*2.39996323;
+  const gi=(i%9===0&&r>.35)?4:Math.min(3,Math.floor(r*4));SEEDS[gi].push([Math.cos(a)*r,Math.sin(a)*r,i,.7+.55*r])}
+
+/* ---------- state + input ---------- */
+let px=0,py=0,tx=0,ty=0,mode=0,t0=0,restartAt=0,FA=1,m1On=false,m2On=false,lastTrail=0,S=[];
+const setT=e=>{tx=cl((e.clientX-W/2)/(W/2),-1,1);ty=cl((e.clientY-H*.4)/(H*.5),-1,1)};
+addEventListener('pointerdown',e=>{if(e.target.closest('button'))return;setT(e);if(mode===2)burst(e.clientX,e.clientY,16,120)});
+addEventListener('pointermove',e=>{setT(e);if(mode===2&&e.buttons&&e.timeStamp-lastTrail>50){lastTrail=e.timeStamp;burst(e.clientX,e.clientY,3,50)}});
+addEventListener('pointerup',()=>{tx=ty=0});
+
+/* Scene 1 -> 2 : cinematic transition */
+$('open').onclick=()=>{
+  if(mode)return;mode=1;$('intro').classList.add('out');
+  burst(W/2,H/2,70,240);for(let i=0;i<24;i++)A.push(amb());
+  setTimeout(()=>{mode=2;t0=performance.now()/1000;$('intro').style.display='none'},1700);
+};
+/* Replay: fades the flower out and grows it again */
+$('replay').onclick=()=>{
+  if(mode!==2||restartAt)return;
+  ['m1','m2','replay'].forEach(i=>$(i).classList.remove('show'));
+  m1On=m2On=false;restartAt=performance.now()/1000+.8;
+};
+
+/* ---------- stem geometry ---------- */
+function B(u){const v=1-u,a=v*v*v,b=3*v*v*u,c=3*v*u*u,d=u*u*u;
+  return[a*S[0]+b*S[2]+c*S[4]+d*S[6],a*S[1]+b*S[3]+c*S[5]+d*S[7]]}
+
+function drawLeaf(l,now,t){
+  const g=eo(seg(t,l.t,l.t+1.8));if(g<=0)return;
+  const [sx,sy]=B(l.u),L=stemL*.36*l.k*g;
+  const a=l.side*(1.05+Math.sin(now*1.1+l.u*9)*.05+px*.05);      // breeze sway
+  const dx=Math.sin(a),dy=-Math.cos(a);
+  const tipX=sx+dx*L,tipY=sy+dy*L+L*.22;                          // slight droop
+  const mx=sx+dx*L*.5,my=sy+dy*L*.5,nx=-dy*L*.2,ny=dx*L*.2;
+  const gr=ctx.createLinearGradient(sx,sy,tipX,tipY);
+  gr.addColorStop(0,'#0f3d16');gr.addColorStop(.6,'#2f7d24');gr.addColorStop(1,'#6fcf47');
+  ctx.beginPath();ctx.moveTo(sx,sy);ctx.quadraticCurveTo(mx+nx,my+ny,tipX,tipY);ctx.quadraticCurveTo(mx-nx,my-ny,sx,sy);
+  ctx.fillStyle=gr;ctx.fill();
+  ctx.beginPath();ctx.moveTo(sx,sy);ctx.lineTo(tipX,tipY);ctx.strokeStyle='rgba(190,255,160,.3)';ctx.lineWidth=1;ctx.stroke();
+}
+
+function drawHead(t,now,hx,hy,sway){
+  const bloom=seg(t,4.6,11),bp=eo(seg(t,...T.bud)),r0=Rc*.7;
+  ctx.save();ctx.translate(hx,hy);
+  ctx.rotate(sway/W*1.2+px*.05);                                   // gentle tilt
+  const br=1+.012*Math.sin(now*1.4);ctx.scale(br*(1-Math.abs(px)*.05),br*(1-Math.abs(py)*.05));
+  // green sepals behind the petals
+  if(bp>0){ctx.fillStyle='#2d6a1f';
+    for(let i=0;i<14;i++){ctx.save();ctx.rotate(i/14*6.2832+.2);ctx.beginPath();ctx.moveTo(0,-Rc*.5);
+      ctx.quadraticCurveTo(Rc*.3,-Rc*.9,0,-Rc*1.3*bp);ctx.quadraticCurveTo(-Rc*.3,-Rc*.9,0,-Rc*.5);ctx.fill();ctx.restore()}}
+  // petals, layer by layer (per-layer gradient is reused for every petal in that layer)
+  let cur=-1,gr;
+  for(const p of petals){
+    const e=eo(seg(t,p.s,p.s+T.petDur));if(e<=0)continue;
+    if(p.l!==cur){cur=p.l;const c=LAYERS[cur].c;gr=ctx.createLinearGradient(0,-r0,0,-R);
+      gr.addColorStop(0,c[0]);gr.addColorStop(.55,c[1]);gr.addColorStop(1,c[2])}
+    const L=(R-r0)*p.len*e,w=L*.22*p.w*(.35+.65*e),sh=(p.l-1)*R*.02;   // sh = parallax between layers
+    ctx.save();ctx.translate(-px*sh,-py*sh);ctx.rotate(p.a+p.tw+Math.sin(now*1.3+p.ph)*.022*bloom);
+    ctx.beginPath();ctx.moveTo(0,-r0);
+    ctx.bezierCurveTo(w*.9,-r0-L*.25,w*1.1,-r0-L*.75,0,-r0-L);
+    ctx.bezierCurveTo(-w*1.1,-r0-L*.75,-w*.9,-r0-L*.25,0,-r0);
+    ctx.fillStyle=gr;ctx.fill();
+    ctx.strokeStyle='rgba(90,40,0,.28)';ctx.lineWidth=.8;ctx.stroke();
+    ctx.beginPath();ctx.moveTo(0,-r0-L*.1);ctx.lineTo(0,-r0-L*.85);ctx.strokeStyle='rgba(120,60,0,.2)';ctx.stroke();
+    ctx.restore();
+  }
+  // green bud (covers petal bases; later hidden by the seed disc)
+  if(bp>0){const q=Rc*.95*bp,g=ctx.createRadialGradient(0,0,0,0,0,q);
+    g.addColorStop(0,'#4a9a30');g.addColorStop(1,'#1d4d16');ctx.fillStyle=g;ctx.beginPath();ctx.arc(0,0,q,0,6.2832);ctx.fill()}
+  // seed disc — nudged with the pointer for depth
+  const cp=eo(seg(t,T.center[0],T.center[0]+1.6));
+  if(cp>0){
+    const rc=Rc*cp,ox=px*R*.03,oy=py*R*.03,dg=ctx.createRadialGradient(ox,oy,0,ox,oy,rc);
+    dg.addColorStop(0,'#0c0603');dg.addColorStop(.6,'#2a1608');dg.addColorStop(.9,'#5b3411');dg.addColorStop(1,'#8a5216');
+    ctx.fillStyle=dg;ctx.beginPath();ctx.arc(ox,oy,rc,0,6.2832);ctx.fill();
+    const cnt=N*eo(seg(t,T.center[0]+.4,T.center[1]));
+    SEEDS.forEach((grp,gi)=>{ctx.beginPath();
+      for(const s of grp){if(s[2]>cnt)break;const x=ox+s[0]*rc*.97,y=oy+s[1]*rc*.97,d=Rc*.034*s[3];ctx.moveTo(x+d,y);ctx.arc(x,y,d,0,6.2832)}
+      ctx.fillStyle=SEED_COLORS[gi];ctx.fill()});
+    ctx.beginPath();ctx.arc(ox,oy,rc,0,6.2832);ctx.strokeStyle='rgba(255,170,40,.35)';ctx.lineWidth=Rc*.05;ctx.stroke();
+    const hl=ctx.createRadialGradient(ox-rc*.3,oy-rc*.35,0,ox-rc*.3,oy-rc*.35,rc*.9);   // soft dome highlight
+    hl.addColorStop(0,'rgba(255,220,150,.2)');hl.addColorStop(1,'rgba(255,220,150,0)');
+    ctx.fillStyle=hl;ctx.beginPath();ctx.arc(ox,oy,rc,0,6.2832);ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawFlower(t,now){
+  const sway=Math.sin(now*.8)*W*.012+px*W*.025;                     // breeze + touch
+  const hx=baseX+sway,hy=baseY-stemL+py*H*.01;
+  S=[baseX,baseY,baseX+W*.06,baseY-stemL*.35,hx-W*.05+sway*.3,hy+stemL*.35,hx,hy];
+  const g=eo(seg(t,...T.stem)),bloom=seg(t,4.6,11);
+  ctx.globalAlpha=FA;
+  if(bloom>0){                                                       // golden halo
+    ctx.globalCompositeOperation='lighter';
+    const a=(.22+.05*Math.sin(now*1.6))*bloom,gl=ctx.createRadialGradient(hx,hy,R*.2,hx,hy,R*2.5);
+    gl.addColorStop(0,`rgba(255,180,40,${a})`);gl.addColorStop(1,'rgba(255,150,20,0)');
+    ctx.fillStyle=gl;ctx.fillRect(hx-R*2.6,hy-R*2.6,R*5.2,R*5.2);ctx.globalCompositeOperation='source-over';
+  }
+  if(g>0){                                                           // stem grows upward
+    ctx.lineCap='round';let [ax,ay]=B(0);const n=28,base=Math.max(5,W*.017);
+    for(let i=1;i<=Math.ceil(n*g);i++){const u=Math.min(g,i/n),[bx,by]=B(u),lw=base*(1.1-.35*u);
+      ctx.beginPath();ctx.moveTo(ax,ay);ctx.lineTo(bx,by);ctx.lineWidth=lw;ctx.strokeStyle='#1f5d22';ctx.stroke();
+      ctx.beginPath();ctx.moveTo(ax-lw*.2,ay);ctx.lineTo(bx-lw*.2,by);ctx.lineWidth=lw*.28;ctx.strokeStyle='rgba(120,220,80,.45)';ctx.stroke();
+      ax=bx;ay=by}
+    if(g<1&&Math.random()<.5){const [x,y]=B(g);spark(x,y,rnd(-15,15),rnd(-30,-5),rnd(5,9),1)}   // glowing tip
+  }
+  for(const l of leaves)drawLeaf(l,now,t);
+  if(t>T.bud[0])drawHead(t,now,hx,hy,sway);
+  ctx.globalAlpha=1;
+}
+
+/* =====================================================================
+   MAIN LOOP (requestAnimationFrame)
+   ===================================================================== */
+function frame(ms){
+  const now=ms/1000,dt=Math.min(.05,now-(frame.l||now));frame.l=now;
+  const k=1-Math.exp(-dt*4);px+=(tx-px)*k;py+=(ty-py)*k;           // smoothed pointer
+  ctx.globalCompositeOperation='source-over';ctx.globalAlpha=1;ctx.fillStyle=bgG;ctx.fillRect(0,0,W,H);
+
+  // ambient fireflies (behind the flower)
+  const target=mode===0?16:Math.round(cl(W*H/10000,24,46));
+  if(A.length<target&&Math.random()<.08)A.push(amb());
+  ctx.globalCompositeOperation='lighter';
+  for(const p of A){
+    p.x+=(p.vx+Math.sin(now*.6+p.ph)*6)*dt;p.y+=p.vy*dt;
+    if(p.y<-20){p.y=H+20;p.x=rnd(0,W)}if(p.x<-20)p.x=W+20;if(p.x>W+20)p.x=-20;
+    glow(p.x,p.y,p.s,.25+.45*(.5+.5*Math.sin(now*1.5+p.ph)));
+  }
+  ctx.globalCompositeOperation='source-over';ctx.globalAlpha=1;
+
+  if(mode===2){
+    if(restartAt&&now>=restartAt){t0=now;restartAt=0;FA=1}
+    const t=now-t0;FA=restartAt?cl((restartAt-now)/.8):1;
+    if(t<1.5&&!restartAt&&Math.random()<.6)spark(baseX+rnd(-40,40),baseY+rnd(-10,10),rnd(-6,6),rnd(-70,-25),rnd(5,10),1.6);  // step 1: tiny particles
+    drawFlower(t,now);
+    if(!restartAt){                                                  // scene 3: messages
+      if(t>T.msg1&&!m1On){m1On=true;$('m1').classList.add('show');$('replay').classList.add('show')}
+      if(t>T.msg2&&!m2On){m2On=true;$('m2').classList.add('show')}
+    }
+  }
+
+  // sparks & tap bursts (in front)
+  ctx.globalCompositeOperation='lighter';
+  for(let i=Bp.length-1;i>=0;i--){
+    const p=Bp[i];p.life+=dt;if(p.life>=p.max){Bp.splice(i,1);continue}
+    p.x+=p.vx*dt;p.y+=p.vy*dt;p.vx*=.985;p.vy*=.985;
+    const a=1-p.life/p.max;glow(p.x,p.y,p.s*(.5+.5*a),a);
+  }
+  ctx.globalCompositeOperation='source-over';ctx.globalAlpha=1;
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
